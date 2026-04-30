@@ -1,7 +1,9 @@
-// On ESP8266, wifi_country_t must be visible before wm_consts_en.h is parsed.
-// On ESP32 the standard WiFi.h already provides it.
+// wm_consts_en.h references wifi_country_t which requires the WiFi header
+// to be included first, on both ESP8266 and ESP32.
 #ifdef ARDUINO_ARCH_ESP8266
 #include <ESP8266WiFi.h>
+#else
+#include <WiFi.h>
 #endif
 #include <wm_consts_en.h>
 #include <wm_strings_en.h>
