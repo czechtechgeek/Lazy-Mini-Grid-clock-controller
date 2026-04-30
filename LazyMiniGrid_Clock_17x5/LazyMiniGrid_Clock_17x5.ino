@@ -1,6 +1,8 @@
-// ESP8266WiFi.h must come before any WiFiManager header because wm_consts_en.h
-// references wifi_country_t which is defined in this header.
+// On ESP8266, wifi_country_t must be visible before wm_consts_en.h is parsed.
+// On ESP32 the standard WiFi.h already provides it.
+#ifdef ARDUINO_ARCH_ESP8266
 #include <ESP8266WiFi.h>
+#endif
 #include <wm_consts_en.h>
 #include <wm_strings_en.h>
 #include <strings_en.h>
@@ -67,7 +69,11 @@
 #include <TimeLib.h>                                 // "Time" by Michael Margolis, used in all configs
 #include <EEPROM.h>                                  // required for reading/saving settings to eeprom
 #ifdef NODEMCU
+#ifdef ARDUINO_ARCH_ESP8266
 #include <ESP8266HTTPClient.h>
+#else
+#include <HTTPClient.h>
+#endif
 #include <WiFiClient.h>
 #include <ArduinoJson.h>
 #include <PubSubClient.h>
@@ -226,7 +232,11 @@ uint8_t fadeDelay = 20;                                        // milliseconds b
 #pragma warning "USEWM without USEWIFI, enabling WiFi"
 #endif
 #ifdef USEWIFI
+#ifdef ARDUINO_ARCH_ESP8266
 #include <ESP8266WiFi.h>
+#else
+#include <WiFi.h>
+#endif
 #include <WiFiUdp.h>
 #endif
 #endif
