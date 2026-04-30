@@ -262,8 +262,9 @@ bool firstLoop = true;
 #define LEDSTUFF
 #ifdef LEDSTUFF
 #ifdef NODEMCU
-#define FASTLED_ESP8266_RAW_PIN_ORDER                        // this means we'll be using the raw esp8266 pin order -> GPIO_12, which is d6 on nodeMCU
-#define LED_PIN 17                                             // led data in connected to GPIO_12 (d6/nodeMCU)
+// FastLED 3.x+ dropped FASTLED_ESP8266_RAW_PIN_ORDER support; use direct GPIO number.
+// D6 on NodeMCU = GPIO12.
+#define LED_PIN 12                                             // led data in connected to GPIO_12 (d6/nodeMCU)
 #else
 #define FASTLED_ALLOW_INTERRUPTS 0                           // AVR + WS2812 + IRQ = https://github.com/FastLED/FastLED/wiki/Interrupt-problems
 #define LED_PIN 6                                            // led data in connected to d6 (arduino)
