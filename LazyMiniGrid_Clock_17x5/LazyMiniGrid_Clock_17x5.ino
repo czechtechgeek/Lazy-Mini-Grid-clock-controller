@@ -223,7 +223,7 @@ uint8_t fadeDelay = 20;                                        // milliseconds b
 #pragma warning "USEWM without USEWIFI, enabling WiFi"
 #endif
 #ifdef USEWIFI
-#include <WiFi.h>
+#include <ESP8266WiFi.h>
 #include <WiFiUdp.h>
 #endif
 #endif
