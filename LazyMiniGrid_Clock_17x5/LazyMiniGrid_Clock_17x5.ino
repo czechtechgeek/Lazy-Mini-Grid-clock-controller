@@ -1,3 +1,6 @@
+// ESP8266WiFi.h must come before any WiFiManager header because wm_consts_en.h
+// references wifi_country_t which is defined in this header.
+#include <ESP8266WiFi.h>
 #include <wm_consts_en.h>
 #include <wm_strings_en.h>
 #include <strings_en.h>
@@ -495,25 +498,8 @@ void setup() {
     //reset settings - wipe credentials for testing
     //wm.resetSettings();
 
-    // Load saved settings from EEPROM before configuring WiFiManager params
-    EEPROM.begin(512);
-    {
-      uint8_t t = EEPROM.read(4);
-      if (t <= 4) infoMode = t;
-      char tmp[64];
-      EEPROM.get(5, tmp);   tmp[23] = '\0'; if (tmp[0] >= 32 && tmp[0] <= 126) strncpy(cityName, tmp, 23);
-      EEPROM.get(29, tmp);  tmp[63] = '\0'; if (tmp[0] >= 32 && tmp[0] <= 126) strncpy(customText, tmp, 63);
-      EEPROM.get(93, tmp);  tmp[23] = '\0'; if (tmp[0] >= 32 && tmp[0] <= 126) strncpy(mqttBroker, tmp, 23);
-      EEPROM.get(117, tmp); tmp[5]  = '\0'; if (tmp[0] >= '1' && tmp[0] <= '9') strncpy(mqttPort, tmp, 5);
-    }
-    // Pre-populate WiFiManager parameters with loaded EEPROM values
-    char modeStr[2] = {'0' + (infoMode & 0x07), '\0'};
-    wm_city  = WiFiManagerParameter("city",     "City (weather)",                             cityName,   23);
-    wm_text  = WiFiManagerParameter("text",     "Custom scroll text",                         customText, 63);
-    wm_mode  = WiFiManagerParameter("mode",     "Info mode 0=clock 1=weather 2=BTC 3=custom", modeStr,     1);
-    wm_mqtt  = WiFiManagerParameter("mqtt",     "MQTT broker IP/hostname",                    mqttBroker, 23);
-    wm_mqttp = WiFiManagerParameter("mqttport", "MQTT port",                                  mqttPort,    5);
-
+    // Register WiFiManager custom parameters (portal shows defaults; EEPROM
+    // values are loaded later in setup() and override at runtime).
     wm.addParameter(&wm_city);
     wm.addParameter(&wm_text);
     wm.addParameter(&wm_mode);
@@ -2344,7 +2330,7 @@ void fetchBtcPrice() {
   int code = http.GET();
   if ( code == 200 ) {
     String body = http.getString();
-    StaticJsonDocument<128> doc;
+    JsonDocument doc;
     if ( !deserializeJson(doc, body) ) {
       long price = doc["bitcoin"]["usd"];
       snprintf(btcStr, sizeof(btcStr), "BTC %ld USD", price);
