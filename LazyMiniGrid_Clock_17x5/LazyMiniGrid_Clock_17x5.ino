@@ -174,7 +174,7 @@ const uint8_t nightColor[2] = { 0, 70 };          // hue 0 = red, fixed brightne
 float factorLDR = 1.0;                            // try 0.5 - 2.0, compensation value for avgLDR. Set dbgLDR true & define DEBUG and watch the serial monitor. Looking...
 const bool dbgLDR = false;                        // ...for values roughly in the range of 120-160 (medium room light), 40-80 (low light) and 0 - 20 in the dark
 #ifdef NODEMCU
-uint8_t pinLDR = 0;                             // LDR connected to A0 (nodeMCU only offers this one)
+uint8_t pinLDR = 12;                            // LDR connected to GPIO12 (LMG controller schematic)
 #else
 uint8_t pinLDR = 1;                             // LDR connected to A1 (in case somebody flashes this sketch on arduino and already has an ldr connected to A1)
 #endif
@@ -275,8 +275,8 @@ bool firstLoop = true;
 #ifdef LEDSTUFF
 #ifdef NODEMCU
 // FastLED 3.x+ dropped FASTLED_ESP8266_RAW_PIN_ORDER support; use direct GPIO number.
-// D6 on NodeMCU = GPIO12.
-#define LED_PIN 12                                             // led data in connected to GPIO_12 (d6/nodeMCU)
+// LMG controller schematic: LED data = GPIO2, LDR = GPIO12.
+#define LED_PIN 2                                              // led data in connected to GPIO_2 (LMG controller board)
 #else
 #define FASTLED_ALLOW_INTERRUPTS 0                           // AVR + WS2812 + IRQ = https://github.com/FastLED/FastLED/wiki/Interrupt-problems
 #define LED_PIN 6                                            // led data in connected to d6 (arduino)
