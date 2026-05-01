@@ -381,10 +381,10 @@ char mqttPort[6]     = "1883";
 char infoMessage[96];
 
 #define SCROLL_BUF_COLS  128
-#define SCROLL_SPEED_MS  100
+#define SCROLL_SPEED_MS  80
 #define CLOCK_SHOW_MS    15000UL
 uint8_t  scrollBuf[SCROLL_BUF_COLS][RES_Y];
-uint8_t  scrollOffset  = 0;
+uint16_t scrollOffset  = 0;
 uint16_t scrollLen     = 0;
 
 WiFiClient   mqttWifi;
@@ -1273,6 +1273,31 @@ void colorizeOutput(uint8_t mode) {
   static uint8_t startColor = 0;
   static uint8_t colorOffset = 0;              // different offsets result in quite different results, depending on the amount of leds inside each segment...
   // ...so it's set inside each color mode if required
+
+#ifdef NODEMCU
+  // During scroll the text spans arbitrary x positions, not just the digit columns.
+  // Colorize every lit pixel across the full display width so the text is visible.
+  if ( dispState == STATE_SCROLL ) {
+    if ( millis() - lastColorChange > colorSpeed ) {
+      if ( reverseColorCycling ) startColor--; else startColor++;
+      lastColorChange = millis();
+    }
+    for ( uint8_t x = 0; x < RES_X; x++ ) {
+      for ( uint8_t y = 0; y < RES_Y; y++ ) {
+        uint16_t px = calcPixel(x, y);
+        if ( leds[px] ) leds[px] = ColorFromPalette(currentPalette, startColor + x * 12, brightness, LINEARBLEND);
+      }
+    }
+    if ( mqttColorActive ) {
+      for ( uint16_t i = 0; i < LED_COUNT; i++ ) {
+        if ( leds[i] ) leds[i] = mqttSolidColor;
+      }
+    }
+    lastRun = millis();
+    return;
+  }
+#endif
+
   /* mode 0 = simply assign different colors with an offset of "colorOffset" to each led based on its x position -> each digit gets its own color */
   if ( mode == 0 ) {
     colorOffset = 24;
