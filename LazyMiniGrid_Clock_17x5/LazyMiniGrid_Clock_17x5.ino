@@ -418,6 +418,20 @@ WiFiManagerParameter wm_mqttp("mqttport","MQTT port",                           
 #endif // NODEMCU
 // ===== END INFO DISPLAY GLOBALS =====
 
+// Forward declarations for NODEMCU-only functions defined later in the file
+#ifdef NODEMCU
+void parseSerialCommand(char* cmd);
+void handleSerialInput();
+void setupWebServer();
+void mqttSetup();
+void mqttReconnect();
+void maybeFetchData();
+void buildInfoMessage();
+void renderStringToScrollBuf(const char* str);
+void applyPalette(uint8_t idx);
+void applyBrightness(uint8_t idx);
+#endif
+
 
 /* -- this is where the fun parts start -------------------------------------------------------------------------------------------------------- */
 
