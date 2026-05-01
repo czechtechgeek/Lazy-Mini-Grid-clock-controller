@@ -275,8 +275,8 @@ bool firstLoop = true;
 #ifdef LEDSTUFF
 #ifdef NODEMCU
 // FastLED 3.x+ dropped FASTLED_ESP8266_RAW_PIN_ORDER support; use direct GPIO number.
-// LMG controller schematic: LED data = GPIO2, LDR = GPIO12.
-#define LED_PIN 2                                              // led data in connected to GPIO_2 (LMG controller board)
+// LMG controller schematic: LED data = GPIO17.
+#define LED_PIN 17                                             // led data connected to GPIO17 (LMG controller schematic)
 #else
 #define FASTLED_ALLOW_INTERRUPTS 0                           // AVR + WS2812 + IRQ = https://github.com/FastLED/FastLED/wiki/Interrupt-problems
 #define LED_PIN 6                                            // led data in connected to d6 (arduino)
