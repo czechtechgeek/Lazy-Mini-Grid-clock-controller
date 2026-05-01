@@ -1,3 +1,10 @@
+// wm_consts_en.h references wifi_country_t which requires the WiFi header
+// to be included first, on both ESP8266 and ESP32.
+#ifdef ARDUINO_ARCH_ESP8266
+#include <ESP8266WiFi.h>
+#else
+#include <WiFi.h>
+#endif
 #include <wm_consts_en.h>
 #include <wm_strings_en.h>
 #include <strings_en.h>
@@ -63,6 +70,20 @@
 
 #include <TimeLib.h>                                 // "Time" by Michael Margolis, used in all configs
 #include <EEPROM.h>                                  // required for reading/saving settings to eeprom
+#ifdef NODEMCU
+#ifdef ARDUINO_ARCH_ESP8266
+#include <ESP8266HTTPClient.h>
+#include <ESP8266WebServer.h>
+typedef ESP8266WebServer LMGWebServer;
+#else
+#include <HTTPClient.h>
+#include <WebServer.h>
+typedef WebServer LMGWebServer;
+#endif
+#include <WiFiClient.h>
+#include <ArduinoJson.h>
+#include <PubSubClient.h>
+#endif
 
 
 /* Start RTC config/parameters--------------------------------------------------------------------------
@@ -157,7 +178,7 @@ const uint8_t nightColor[2] = { 0, 70 };          // hue 0 = red, fixed brightne
 float factorLDR = 1.0;                            // try 0.5 - 2.0, compensation value for avgLDR. Set dbgLDR true & define DEBUG and watch the serial monitor. Looking...
 const bool dbgLDR = false;                        // ...for values roughly in the range of 120-160 (medium room light), 40-80 (low light) and 0 - 20 in the dark
 #ifdef NODEMCU
-uint8_t pinLDR = 0;                             // LDR connected to A0 (nodeMCU only offers this one)
+uint8_t pinLDR = 12;                            // LDR connected to GPIO12 (LMG controller schematic)
 #else
 uint8_t pinLDR = 1;                             // LDR connected to A1 (in case somebody flashes this sketch on arduino and already has an ldr connected to A1)
 #endif
@@ -217,7 +238,11 @@ uint8_t fadeDelay = 20;                                        // milliseconds b
 #pragma warning "USEWM without USEWIFI, enabling WiFi"
 #endif
 #ifdef USEWIFI
+#ifdef ARDUINO_ARCH_ESP8266
+#include <ESP8266WiFi.h>
+#else
 #include <WiFi.h>
+#endif
 #include <WiFiUdp.h>
 #endif
 #endif
@@ -253,8 +278,9 @@ bool firstLoop = true;
 #define LEDSTUFF
 #ifdef LEDSTUFF
 #ifdef NODEMCU
-#define FASTLED_ESP8266_RAW_PIN_ORDER                        // this means we'll be using the raw esp8266 pin order -> GPIO_12, which is d6 on nodeMCU
-#define LED_PIN 17                                             // led data in connected to GPIO_12 (d6/nodeMCU)
+// FastLED 3.x+ dropped FASTLED_ESP8266_RAW_PIN_ORDER support; use direct GPIO number.
+// LMG controller schematic: LED data = GPIO17.
+#define LED_PIN 17                                             // led data connected to GPIO17 (LMG controller schematic)
 #else
 #define FASTLED_ALLOW_INTERRUPTS 0                           // AVR + WS2812 + IRQ = https://github.com/FastLED/FastLED/wiki/Interrupt-problems
 #define LED_PIN 6                                            // led data in connected to d6 (arduino)
@@ -321,10 +347,15 @@ uint8_t clockStatus = 1;                  // Used for various things, don't mess
 // 0 = regular mode, 1 = startup, 9x = setup modes (90, 91, 92, 93...)
 
 /* these values will be saved to EEPROM:
-  0 = index for selected palette
-  1 = index for selected brightness level
-  2 = displayMode, 12h/24h mode
-  3 = colorMode */
+  0   = index for selected palette
+  1   = index for selected brightness level
+  2   = displayMode, 12h/24h mode
+  3   = colorMode
+  4   = infoMode (new)
+  5   = cityName[24] (new)
+  29  = customText[64] (new)
+  93  = mqttBroker[24] (new)
+  117 = mqttPort[6] (new)   total: ~123 bytes used of 512 */
 
 /* End of FastLED/clock stuff */
 // End clock specific configs/parameters
@@ -332,6 +363,74 @@ uint8_t clockStatus = 1;                  // Used for various things, don't mess
 /* other variables */
 uint8_t btnRepeatCounter = 0;         // keeps track of how often a button press has been repeated
 /* */
+
+// ===== SECTION: INFO DISPLAY GLOBALS =====
+#ifdef NODEMCU
+
+uint8_t infoMode = 0;
+enum DisplayState : uint8_t { STATE_CLOCK, STATE_SCROLL };
+DisplayState dispState = STATE_CLOCK;
+unsigned long clockDisplayUntil = 0;
+
+char weatherStr[32]  = "";
+char btcStr[24]      = "";
+char cityName[24]    = "London";
+char customText[64]  = "HELLO WORLD";
+char mqttBroker[24]  = "";
+char mqttPort[6]     = "1883";
+char infoMessage[96];
+
+#define SCROLL_BUF_COLS  128
+#define CLOCK_SHOW_MS    15000UL
+uint16_t scrollSpeedMs = 80;       // ms per column; configurable via SPEED= command
+uint8_t  scrollBuf[SCROLL_BUF_COLS][RES_Y];
+uint16_t scrollOffset  = 0;
+uint16_t scrollLen     = 0;
+
+WiFiClient   mqttWifi;
+PubSubClient mqttClient(mqttWifi);
+bool  mqttColorActive = false;
+CRGB  mqttSolidColor  = CRGB::Black;
+
+LMGWebServer webServer(80);
+
+char    serialBuf[128];
+uint8_t serialPos       = 0;
+uint8_t serialButtonSim = 0;
+char    webCmdResponse[192];   // last command response for web API
+
+unsigned long lastWeatherFetch = 0;
+unsigned long lastBtcFetch     = 0;
+#define WEATHER_FETCH_INTERVAL  600000UL
+#define BTC_FETCH_INTERVAL      120000UL
+
+uint8_t brightnessIndex = 0;
+uint8_t paletteIndex    = 0;
+
+#ifdef USEWM
+WiFiManagerParameter wm_city("city",     "City (weather)",                             "London",     23);
+WiFiManagerParameter wm_text("text",     "Custom scroll text",                         "HELLO WORLD",63);
+WiFiManagerParameter wm_mode("mode",     "Info mode 0=clock 1=weather 2=BTC 3=custom", "0",           1);
+WiFiManagerParameter wm_mqtt("mqtt",     "MQTT broker IP/hostname",                    "",           23);
+WiFiManagerParameter wm_mqttp("mqttport","MQTT port",                                  "1883",        5);
+#endif
+
+#endif // NODEMCU
+// ===== END INFO DISPLAY GLOBALS =====
+
+// Forward declarations for NODEMCU-only functions defined later in the file
+#ifdef NODEMCU
+void parseSerialCommand(char* cmd);
+void handleSerialInput();
+void setupWebServer();
+void mqttSetup();
+void mqttReconnect();
+void maybeFetchData();
+void buildInfoMessage();
+void renderStringToScrollBuf(const char* str);
+void applyPalette(uint8_t idx);
+void applyBrightness(uint8_t idx);
+#endif
 
 
 /* -- this is where the fun parts start -------------------------------------------------------------------------------------------------------- */
@@ -433,6 +532,29 @@ void setup() {
     //reset settings - wipe credentials for testing
     //wm.resetSettings();
 
+    // Register WiFiManager custom parameters (portal shows defaults; EEPROM
+    // values are loaded later in setup() and override at runtime).
+    wm.addParameter(&wm_city);
+    wm.addParameter(&wm_text);
+    wm.addParameter(&wm_mode);
+    wm.addParameter(&wm_mqtt);
+    wm.addParameter(&wm_mqttp);
+    wm.setSaveParamsCallback([]() {
+      strncpy(cityName,   wm_city.getValue(),  23); cityName[23]   = '\0';
+      strncpy(customText, wm_text.getValue(),  63); customText[63] = '\0';
+      uint8_t m = (uint8_t)atoi(wm_mode.getValue()); if (m <= 4) infoMode = m;
+      strncpy(mqttBroker, wm_mqtt.getValue(),  23); mqttBroker[23] = '\0';
+      strncpy(mqttPort,   wm_mqttp.getValue(),  5); mqttPort[5]    = '\0';
+      EEPROM.put(4, infoMode);
+      EEPROM.put(5, cityName);
+      EEPROM.put(29, customText);
+      EEPROM.put(93, mqttBroker);
+      EEPROM.put(117, mqttPort);
+      EEPROM.commit();
+      lastWeatherFetch = 0;
+      Serial.println(F("WiFiManager: params saved to EEPROM"));
+    });
+
     wm.setConfigPortalBlocking(false);
     wm.setConfigPortalTimeout(60);
     //automatically connect using saved credentials if they exist
@@ -526,6 +648,10 @@ void setup() {
   brightnessSwitcher();
   colorModeSwitcher();
   displayModeSwitcher();
+#ifdef NODEMCU
+  { uint8_t t = EEPROM.read(0); if (t < 6) paletteIndex = t; }
+  { uint8_t t = EEPROM.read(1); if (t < 3) brightnessIndex = t; }
+#endif
 #endif
 
 #ifdef FASTFORWARD
@@ -534,6 +660,11 @@ void setup() {
 
 #ifdef USENTP
   syncHelper();
+#endif
+
+#ifdef NODEMCU
+  mqttSetup();
+  setupWebServer();
 #endif
 
   clockStatus = 0;       // change from 1 (startup) to 0 (running mode)
@@ -549,12 +680,20 @@ void setup() {
 /* MAIN LOOP */
 
 void loop() {
+#ifdef NODEMCU
+  handleSerialInput();
+#endif
   static uint8_t lastInput = 0;                     // != 0 if any button press has been detected
   static uint8_t lastSecondDisplayed = 0;           // This keeps track of the last second when the display was updated (HH:MM and HH:MM:SS)
   static unsigned long lastCheckRTC = millis();     // This will be used to read system time in case no RTC is defined (not supported!)
   static bool doUpdate = false;                     // Update led content whenever something sets this to true. Coloring will always happen at fixed intervals!
 #ifdef USEWM
   wm.process();
+#endif
+#ifdef NODEMCU
+  mqttReconnect();
+  mqttClient.loop();
+  webServer.handleClient();
 #endif
 #ifdef USERTC
   static RtcDateTime rtcTime = Rtc.GetDateTime().Epoch32Time();  // Get time from rtc (epoch)
@@ -588,6 +727,14 @@ void loop() {
 #endif
       }
       if ( lastInput == 3 ) {                                                              // short press button A + button B
+#ifdef NODEMCU
+        infoMode = (infoMode + 1) % 5;
+        EEPROM.put(4, infoMode); EEPROM.commit();
+        clockDisplayUntil = 0;
+#ifdef DEBUG
+        Serial.print(F("infoMode set to ")); Serial.println(infoMode);
+#endif
+#endif
       }
     } else if ( btnRepeatCounter > 8 ) {                                                   // execute long press function(s)...
       btnRepeatCounter = 1;                                                                // ..reset btnRepeatCounter to stop this from repeating
@@ -650,17 +797,24 @@ void loop() {
   }
 
   if ( doUpdate ) {                                      // this will update the led array if doUpdate is true because of a new second from the rtc
+#ifdef NODEMCU
+    maybeFetchData();
+#endif
 #ifdef USERTC
     setTime(rtcTime);                                  // sync system time to rtc every second
 #ifdef LEDSTUFF
-    FastLED.clear();                                 // 1A - clear all leds...
-    displayTime(rtcTime);                            // 2A - output rtcTime to the led array..
+    if ( dispState == STATE_CLOCK ) {
+      FastLED.clear();                               // 1A - clear all leds...
+      displayTime(rtcTime);                          // 2A - output rtcTime to the led array..
+    }
 #endif
     lastSecondDisplayed = second(rtcTime);
 #else
 #ifdef LEDSTUFF
-    FastLED.clear();                                 // 1B - clear all leds...
-    displayTime(sysTime);                            // 2B - output sysTime to the led array...
+    if ( dispState == STATE_CLOCK ) {
+      FastLED.clear();                               // 1B - clear all leds...
+      displayTime(sysTime);                          // 2B - output sysTime to the led array...
+    }
 #endif
     lastSecondDisplayed = second(sysTime);
 #endif
@@ -679,6 +833,34 @@ void loop() {
     }
 #endif
   }
+
+#ifdef NODEMCU
+  // Start scrolling when clock has been shown long enough
+  if ( dispState == STATE_CLOCK && infoMode != 0 && millis() > clockDisplayUntil ) {
+    buildInfoMessage();
+    renderStringToScrollBuf(infoMessage);
+    dispState = STATE_SCROLL;
+  }
+  // Scroll tick
+  if ( dispState == STATE_SCROLL ) {
+    static unsigned long lastScrollTick = 0;
+    if ( millis() - lastScrollTick >= scrollSpeedMs ) {
+      FastLED.clear();
+      drawScrollFrame();
+      colorizeOutput(colorMode);
+      FastLED.show();
+      scrollOffset++;
+      lastScrollTick = millis();
+      if ( scrollOffset >= scrollLen + RES_X ) {
+        dispState = STATE_CLOCK;
+        clockDisplayUntil = millis() + CLOCK_SHOW_MS;
+        doUpdate = true;
+      }
+    }
+    lastInput = inputButtons();
+    return;
+  }
+#endif
 
 #ifdef LEDSTUFF
   colorizeOutput(colorMode);                           // 1C, 2C, 3C...colorize the data inside the led array right now...
@@ -758,6 +940,9 @@ void fadePixel(uint8_t x, uint8_t y, uint8_t amount, uint8_t fadeType) {
 
 void pixelFader() {
   if ( fadePixels == 0 ) return;
+#ifdef NODEMCU
+  if ( dispState == STATE_SCROLL ) return;
+#endif
   static unsigned long firstRun = 0;                                                                // time when a change has been detected and fading starts
   static unsigned long lastRun = 0;                                                                 // used to store time when this function was executed the last time
   static boolean active = false;                                                                    // will be used as a flag when to do something / fade pixels
@@ -1088,6 +1273,33 @@ void colorizeOutput(uint8_t mode) {
   static uint8_t startColor = 0;
   static uint8_t colorOffset = 0;              // different offsets result in quite different results, depending on the amount of leds inside each segment...
   // ...so it's set inside each color mode if required
+
+#ifdef NODEMCU
+  // During scroll the text spans arbitrary x positions, not just the digit columns.
+  // Use dedicated statics so clock and scroll color cycles don't interfere.
+  if ( dispState == STATE_SCROLL ) {
+    static uint8_t scrollHue = 0;
+    static unsigned long scrollHueTime = 0;
+    if ( millis() - scrollHueTime > 40 ) {   // full palette cycle ~10 s, smooth and flicker-free
+      scrollHue++;
+      scrollHueTime = millis();
+    }
+    for ( uint8_t x = 0; x < RES_X; x++ ) {
+      for ( uint8_t y = 0; y < RES_Y; y++ ) {
+        uint16_t px = calcPixel(x, y);
+        if ( leds[px] ) leds[px] = ColorFromPalette(currentPalette, scrollHue + x * 10, brightness, LINEARBLEND);
+      }
+    }
+    if ( mqttColorActive ) {
+      for ( uint16_t i = 0; i < LED_COUNT; i++ ) {
+        if ( leds[i] ) leds[i] = mqttSolidColor;
+      }
+    }
+    lastRun = millis();
+    return;
+  }
+#endif
+
   /* mode 0 = simply assign different colors with an offset of "colorOffset" to each led based on its x position -> each digit gets its own color */
   if ( mode == 0 ) {
     colorOffset = 24;
@@ -1255,6 +1467,14 @@ void colorizeOutput(uint8_t mode) {
       }
     }
   */
+
+#ifdef NODEMCU
+  if ( mqttColorActive ) {
+    for ( uint16_t i = 0; i < LED_COUNT; i++ ) {
+      if ( leds[i] ) leds[i] = mqttSolidColor;
+    }
+  }
+#endif
 
   lastRun = millis();
 }
@@ -1668,12 +1888,20 @@ uint8_t inputButtons() {
   }
   lastState = currentState;
   lastReadout = millis();
-#ifdef DEBUG                                                      // output some information and read serial input, if available
+#ifdef DEBUG
+#ifdef NODEMCU
+  if ( serialButtonSim != 0 ) {
+    Serial.print(F("inputButtons(): Serial button sim: ")); Serial.println(serialButtonSim);
+    retVal = serialButtonSim;
+    serialButtonSim = 0;
+  }
+#else
   uint8_t serialInput = dbgInput();
   if ( serialInput != 0 ) {
     Serial.print(F("inputButtons(): Serial input detected: ")); Serial.println(serialInput);
     retVal = serialInput;
   }
+#endif
   if ( retVal != 0 ) {
     Serial.print(F("inputButtons(): Return value is: ")) ; Serial.print(retVal); Serial.print(F(" - btnRepeatCounter is: ")); Serial.println(btnRepeatCounter);
   }
@@ -1953,3 +2181,606 @@ void connectWPS() {                                                             
 #endif
 
 /* Wooohaa... this one took a bit longer than expected... ^^ /daniel cikic - 07/2021 */
+
+// ===== SECTION: EXTENDED FONT =====
+#ifdef NODEMCU
+
+/* A-Z (indices 0-25), '-' (26), '.' (27), '$' (28), ' ' (29)
+   Each glyph is 3x5, stored BOTTOM-ROW FIRST to match showChar() convention */
+// Row 0 = top of character (matches digit font: y-flip sends row 0 to physical top)
+const uint8_t extChars[30][CHAR_X * CHAR_Y] PROGMEM = {
+  { 0,1,0, 1,0,1, 1,1,1, 1,0,1, 1,0,1 },   // A
+  { 1,1,0, 1,0,1, 1,1,0, 1,0,1, 1,1,0 },   // B  (symmetric)
+  { 0,1,1, 1,0,0, 1,0,0, 1,0,0, 0,1,1 },   // C  (symmetric)
+  { 1,1,0, 1,0,1, 1,0,1, 1,0,1, 1,1,0 },   // D  (symmetric)
+  { 1,1,1, 1,0,0, 1,1,0, 1,0,0, 1,1,1 },   // E  (symmetric)
+  { 1,1,1, 1,0,0, 1,1,0, 1,0,0, 1,0,0 },   // F
+  { 0,1,1, 1,0,0, 1,0,1, 1,0,1, 0,1,1 },   // G
+  { 1,0,1, 1,0,1, 1,1,1, 1,0,1, 1,0,1 },   // H  (symmetric)
+  { 1,1,1, 0,1,0, 0,1,0, 0,1,0, 1,1,1 },   // I  (symmetric)
+  { 0,1,1, 0,0,1, 0,0,1, 0,0,1, 1,1,0 },   // J
+  { 1,0,1, 1,1,0, 1,0,0, 1,1,0, 1,0,1 },   // K  (symmetric)
+  { 1,0,0, 1,0,0, 1,0,0, 1,0,0, 1,1,1 },   // L
+  { 1,0,1, 1,1,1, 1,0,1, 1,0,1, 1,0,1 },   // M
+  { 1,0,1, 1,1,0, 1,0,1, 1,0,1, 1,0,1 },   // N
+  { 1,1,1, 1,0,1, 1,0,1, 1,0,1, 1,1,1 },   // O  (symmetric)
+  { 1,1,0, 1,0,1, 1,1,0, 1,0,0, 1,0,0 },   // P
+  { 0,1,0, 1,0,1, 1,0,1, 1,1,1, 0,1,1 },   // Q
+  { 1,1,0, 1,0,1, 1,1,0, 1,1,0, 1,0,1 },   // R
+  { 0,1,1, 1,0,0, 0,1,0, 0,0,1, 1,1,0 },   // S
+  { 1,1,1, 0,1,0, 0,1,0, 0,1,0, 0,1,0 },   // T
+  { 1,0,1, 1,0,1, 1,0,1, 1,0,1, 1,1,1 },   // U
+  { 1,0,1, 1,0,1, 1,0,1, 0,1,0, 0,1,0 },   // V
+  { 1,0,1, 1,0,1, 1,1,1, 1,0,1, 1,0,1 },   // W
+  { 1,0,1, 0,1,0, 1,0,1, 0,1,0, 1,0,1 },   // X  (symmetric)
+  { 1,0,1, 1,0,1, 0,1,0, 0,1,0, 0,1,0 },   // Y
+  { 1,1,1, 0,0,1, 0,1,0, 1,0,0, 1,1,1 },   // Z
+  { 0,0,0, 0,0,0, 1,1,1, 0,0,0, 0,0,0 },   // -  (index 26, symmetric)
+  { 0,0,0, 0,0,0, 0,0,0, 0,0,0, 1,0,0 },   // .  (index 27, dot at bottom-left)
+  { 0,1,0, 0,1,1, 0,1,0, 1,1,0, 0,1,0 },   // $  (index 28)
+  { 0,0,0, 0,0,0, 0,0,0, 0,0,0, 0,0,0 },   // ' ' (index 29)
+};
+
+void showCharExt(uint8_t idx, uint8_t x, uint8_t y) {
+  for ( uint8_t i = 0; i < (CHAR_X * CHAR_Y); i++ ) {
+    if ( pgm_read_byte_near(&extChars[idx][i]) == 1 ) {
+      setPixel(x + (i % CHAR_X), (y + CHAR_Y - 1) - (i / CHAR_X));
+    }
+  }
+}
+
+void showCharASCII(char c, uint8_t x, uint8_t y) {
+  if ( c >= '0' && c <= '9' ) { showChar(c - '0', x, y); return; }
+  if ( c >= 'a' && c <= 'z' ) c -= 32;
+  if ( c >= 'A' && c <= 'Z' ) { showCharExt(c - 'A', x, y); return; }
+  if ( c == '-' ) { showCharExt(26, x, y); return; }
+  if ( c == '.' ) { showCharExt(27, x, y); return; }
+  if ( c == '$' ) { showCharExt(28, x, y); return; }
+  showCharExt(29, x, y);  // space / unknown
+}
+// ===== END EXTENDED FONT =====
+
+
+// ===== SECTION: SCROLL ENGINE =====
+
+void renderCharToBuf(char c, uint8_t xstart) {
+  if ( c >= 'a' && c <= 'z' ) c -= 32;
+  bool useExt = true;
+  uint8_t idx = 29;  // space default
+  if ( c >= '0' && c <= '9' ) { idx = c - '0'; useExt = false; }
+  else if ( c >= 'A' && c <= 'Z' ) idx = c - 'A';
+  else if ( c == '-' ) idx = 26;
+  else if ( c == '.' ) idx = 27;
+  else if ( c == '$' ) idx = 28;
+
+  for ( uint8_t i = 0; i < (CHAR_X * CHAR_Y); i++ ) {
+    uint8_t bit = useExt
+      ? pgm_read_byte_near(&extChars[idx][i])
+      : pgm_read_byte_near(&characters[idx][i]);
+    if ( bit == 1 ) {
+      uint8_t col = xstart + (i % CHAR_X);
+      uint8_t row = 4 - (i / CHAR_X);   // matches showChar y-flip
+      if ( col < SCROLL_BUF_COLS ) scrollBuf[col][row] = 1;
+    }
+  }
+}
+
+void renderStringToScrollBuf(const char* str) {
+  memset(scrollBuf, 0, sizeof(scrollBuf));
+  uint8_t xpos = RES_X;   // start off-screen right
+  for ( uint8_t i = 0; str[i] != '\0' && xpos < SCROLL_BUF_COLS - CHAR_X; i++ ) {
+    renderCharToBuf(str[i], xpos);
+    xpos += CHAR_X + 1;
+  }
+  scrollLen    = xpos - RES_X;
+  scrollOffset = 0;
+}
+
+void drawScrollFrame() {
+  for ( uint8_t x = 0; x < RES_X; x++ ) {
+    uint16_t col = (uint16_t)scrollOffset + x;
+    if ( col < SCROLL_BUF_COLS ) {
+      for ( uint8_t y = 0; y < RES_Y; y++ ) {
+        if ( scrollBuf[col][y] ) setPixel(x, y);
+      }
+    }
+  }
+}
+// ===== END SCROLL ENGINE =====
+
+
+// ===== SECTION: INFO MODES =====
+
+void buildInfoMessage() {
+  infoMessage[0] = '\0';
+  switch ( infoMode ) {
+    case 1:
+      if ( weatherStr[0] ) strncpy(infoMessage, weatherStr, 95);
+      else snprintf(infoMessage, 96, "WEATHER N/A");
+      break;
+    case 2:
+      if ( btcStr[0] ) strncpy(infoMessage, btcStr, 95);
+      else snprintf(infoMessage, 96, "BTC N/A");
+      break;
+    case 3:
+      strncpy(infoMessage, customText, 95);
+      break;
+    case 4:
+      if ( weatherStr[0] && btcStr[0] )
+        snprintf(infoMessage, 96, "%s  %s", weatherStr, btcStr);
+      else if ( weatherStr[0] )
+        strncpy(infoMessage, weatherStr, 95);
+      else if ( btcStr[0] )
+        strncpy(infoMessage, btcStr, 95);
+      else
+        snprintf(infoMessage, 96, "NO DATA");
+      break;
+    default:
+      strncpy(infoMessage, customText, 95);
+      break;
+  }
+  infoMessage[95] = '\0';
+}
+
+void applyPalette(uint8_t idx) {
+  paletteIndex = constrain(idx, 0, 5);
+  switch ( paletteIndex ) {
+    case 0: currentPalette = CRGBPalette16(CRGB(224,0,32),CRGB(0,0,244),CRGB(128,0,128),CRGB(224,0,64)); break;
+    case 1: currentPalette = CRGBPalette16(CRGB(224,16,0),CRGB(192,64,0),CRGB(192,128,0),CRGB(240,40,0)); break;
+    case 2: currentPalette = CRGBPalette16(CRGB::Aquamarine,CRGB::Turquoise,CRGB::Blue,CRGB::DeepSkyBlue); break;
+    case 3: currentPalette = RainbowColors_p; break;
+    case 4: currentPalette = PartyColors_p; break;
+    case 5: currentPalette = CRGBPalette16(CRGB::LawnGreen); break;
+  }
+  EEPROM.put(0, paletteIndex); EEPROM.commit();
+  mqttColorActive = false;
+}
+
+void applyBrightness(uint8_t idx) {
+  brightnessIndex = constrain(idx, 0, 2);
+  brightness = brightnessLevels[brightnessIndex];
+  FastLED.setBrightness(brightness);
+  EEPROM.put(1, brightnessIndex); EEPROM.commit();
+}
+// ===== END INFO MODES =====
+
+
+// ===== SECTION: HTTP FETCH =====
+
+void stripHighBytes(char* s) {
+  for ( uint8_t i = 0; s[i]; i++ ) {
+    if ( (uint8_t)s[i] > 127 ) s[i] = '?';
+    else if ( s[i] >= 'a' && s[i] <= 'z' ) s[i] -= 32;  // uppercase
+  }
+}
+
+void fetchWeather() {
+  if ( WiFi.status() != WL_CONNECTED ) return;
+  WiFiClient wc;
+  HTTPClient http;
+  char url[64];
+  snprintf(url, sizeof(url), "http://wttr.in/%s?format=%%25t+%%25C", cityName);
+  http.begin(wc, url);
+  http.setTimeout(1500);
+  int code = http.GET();
+  if ( code == 200 ) {
+    String body = http.getString();
+    body.trim();
+    // strip degree sign and other non-ASCII
+    for ( int i = 0; i < (int)body.length(); i++ ) {
+      if ( (uint8_t)body[i] > 127 ) { body.remove(i, 1); i--; }
+    }
+    body.toUpperCase();
+    // prepend city name
+    String msg = String(cityName);
+    msg.toUpperCase();
+    msg += " ";
+    msg += body;
+    msg.toCharArray(weatherStr, sizeof(weatherStr));
+    weatherStr[sizeof(weatherStr)-1] = '\0';
+#ifdef DEBUG
+    Serial.print(F("fetchWeather: ")); Serial.println(weatherStr);
+#endif
+  }
+  http.end();
+}
+
+void fetchBtcPrice() {
+  if ( WiFi.status() != WL_CONNECTED ) return;
+  WiFiClient wc;
+  HTTPClient http;
+  http.begin(wc, "http://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd");
+  http.setTimeout(1500);
+  int code = http.GET();
+  if ( code == 200 ) {
+    String body = http.getString();
+    JsonDocument doc;
+    if ( !deserializeJson(doc, body) ) {
+      long price = doc["bitcoin"]["usd"];
+      snprintf(btcStr, sizeof(btcStr), "BTC %ld USD", price);
+#ifdef DEBUG
+      Serial.print(F("fetchBtcPrice: ")); Serial.println(btcStr);
+#endif
+    }
+  }
+  http.end();
+}
+
+void maybeFetchData() {
+  if ( WiFi.status() != WL_CONNECTED ) return;
+#ifdef USEWM
+  if ( wm.getConfigPortalActive() ) return;
+#endif
+  if ( dispState == STATE_SCROLL ) return;
+
+  unsigned long now = millis();
+  if ( (infoMode == 1 || infoMode == 4) && (now - lastWeatherFetch >= WEATHER_FETCH_INTERVAL) ) {
+    fetchWeather();
+    lastWeatherFetch = now;
+  }
+  if ( (infoMode == 2 || infoMode == 4) && (now - lastBtcFetch >= BTC_FETCH_INTERVAL) ) {
+    fetchBtcPrice();
+    lastBtcFetch = now;
+  }
+}
+// ===== END HTTP FETCH =====
+
+
+// ===== SECTION: MQTT =====
+
+void mqttSetup() {
+  if ( strlen(mqttBroker) == 0 ) return;
+  mqttClient.setServer(mqttBroker, (uint16_t)atoi(mqttPort));
+  mqttClient.setCallback([](char* topic, byte* payload, unsigned int len) {
+    char msg[96];
+    len = min(len, (unsigned int)95);
+    memcpy(msg, payload, len);
+    msg[len] = '\0';
+#ifdef DEBUG
+    Serial.print(F("MQTT rx [")); Serial.print(topic); Serial.print(F("] ")); Serial.println(msg);
+#endif
+    if ( strcmp(topic, "lmg/text") == 0 ) {
+      strncpy(customText, msg, 63); customText[63] = '\0';
+      buildInfoMessage();
+      renderStringToScrollBuf(msg);  // scroll the pushed text directly
+      dispState = STATE_SCROLL;
+    } else if ( strcmp(topic, "lmg/mode") == 0 ) {
+      uint8_t m = (uint8_t)constrain(atoi(msg), 0, 4);
+      infoMode = m;
+      EEPROM.put(4, infoMode); EEPROM.commit();
+      clockDisplayUntil = 0;
+    } else if ( strcmp(topic, "lmg/brightness") == 0 ) {
+      applyBrightness((uint8_t)constrain(atoi(msg), 0, 2));
+    } else if ( strcmp(topic, "lmg/palette") == 0 ) {
+      applyPalette((uint8_t)constrain(atoi(msg), 0, 5));
+    } else if ( strcmp(topic, "lmg/color") == 0 ) {
+      int r = 0, g = 0, b = 0;
+      sscanf(msg, "%d,%d,%d", &r, &g, &b);
+      mqttSolidColor = CRGB(constrain(r,0,255), constrain(g,0,255), constrain(b,0,255));
+      mqttColorActive = true;
+    } else if ( strcmp(topic, "lmg/btc") == 0 ) {
+      snprintf(btcStr, sizeof(btcStr), "BTC %s USD", msg);
+      lastBtcFetch = millis();
+    } else if ( strcmp(topic, "lmg/weather") == 0 ) {
+      strncpy(weatherStr, msg, 31); weatherStr[31] = '\0';
+      lastWeatherFetch = millis();
+    }
+  });
+}
+
+void mqttReconnect() {
+  if ( strlen(mqttBroker) == 0 ) return;
+  if ( mqttClient.connected() ) return;
+  if ( WiFi.status() != WL_CONNECTED ) return;
+  static unsigned long lastAttempt = 0;
+  if ( millis() - lastAttempt < 10000 ) return;
+  lastAttempt = millis();
+  if ( mqttClient.connect("LazyMiniGrid") ) {
+    mqttClient.subscribe("lmg/#");
+#ifdef DEBUG
+    Serial.println(F("MQTT connected, subscribed lmg/#"));
+#endif
+  }
+}
+// ===== END MQTT =====
+
+
+// ===== SECTION: UART COMMANDS =====
+
+void parseSerialCommand(char* cmd) {
+  // Uppercase the key part only
+  char* sep = strchr(cmd, '=');
+  if ( sep ) {
+    for ( char* p = cmd; p < sep; p++ ) {
+      if ( *p >= 'a' && *p <= 'z' ) *p -= 32;
+    }
+  } else {
+    for ( char* p = cmd; *p; p++ ) {
+      if ( *p >= 'a' && *p <= 'z' ) *p -= 32;
+    }
+  }
+
+  // Single-char button simulation for backwards compat with old dbgInput shortcuts
+  if ( cmd[1] == '\0' ) {
+    if ( cmd[0] == '7' ) { serialButtonSim = 1; return; }
+    if ( cmd[0] == '8' ) { serialButtonSim = 2; return; }
+    if ( cmd[0] == '9' ) { serialButtonSim = 3; return; }
+    if ( cmd[0] == '4' ) { btnRepeatCounter = 10; serialButtonSim = 1; return; }
+    if ( cmd[0] == '5' ) { btnRepeatCounter = 10; serialButtonSim = 2; return; }
+    if ( cmd[0] == '6' ) { btnRepeatCounter = 10; serialButtonSim = 3; return; }
+  }
+
+// Helper: write response to both Serial and webCmdResponse buffer
+#define CMD_REPLY(msg) do { Serial.println(F(msg)); strncpy(webCmdResponse, msg, sizeof(webCmdResponse)-1); } while(0)
+#define CMD_REPLY_S(msg) do { Serial.println(msg); strncpy(webCmdResponse, msg, sizeof(webCmdResponse)-1); } while(0)
+
+  if ( strcmp(cmd, "STATUS") == 0 ) {
+    snprintf(webCmdResponse, sizeof(webCmdResponse),
+             "{\"mode\":%d,\"city\":\"%s\",\"text\":\"%s\",\"mqtt\":\"%s:%s\",\"bright\":%d,\"palette\":%d,\"speed\":%d}",
+             infoMode, cityName, customText, mqttBroker, mqttPort, brightnessIndex, paletteIndex, scrollSpeedMs);
+    Serial.println(webCmdResponse);
+    return;
+  }
+
+  if ( strcmp(cmd, "RESET") == 0 ) {
+    for ( int i = 0; i < 128; i++ ) EEPROM.write(i, 0xFF);
+    EEPROM.commit();
+    CMD_REPLY("OK: EEPROM reset, reboot to apply");
+    return;
+  }
+
+  if ( !sep ) { CMD_REPLY("ERR: expected KEY=VALUE"); return; }
+
+  *sep = '\0';
+  char* key = cmd;
+  char* val = sep + 1;
+
+  if ( strcmp(key, "MODE") == 0 ) {
+    uint8_t m = (uint8_t)constrain(atoi(val), 0, 4);
+    infoMode = m; EEPROM.put(4, infoMode); EEPROM.commit();
+    clockDisplayUntil = 0;
+    CMD_REPLY("OK: mode set");
+  } else if ( strcmp(key, "CITY") == 0 ) {
+    strncpy(cityName, val, 23); cityName[23] = '\0';
+    EEPROM.put(5, cityName); EEPROM.commit();
+    lastWeatherFetch = 0;
+    CMD_REPLY("OK: city set");
+  } else if ( strcmp(key, "TEXT") == 0 ) {
+    strncpy(customText, val, 63); customText[63] = '\0';
+    EEPROM.put(29, customText); EEPROM.commit();
+    CMD_REPLY("OK: text set");
+  } else if ( strcmp(key, "MQTT") == 0 ) {
+    char* colon = strrchr(val, ':');
+    if ( colon ) {
+      *colon = '\0';
+      strncpy(mqttPort, colon + 1, 5); mqttPort[5] = '\0';
+    }
+    strncpy(mqttBroker, val, 23); mqttBroker[23] = '\0';
+    EEPROM.put(93, mqttBroker); EEPROM.put(117, mqttPort); EEPROM.commit();
+    mqttClient.disconnect();
+    mqttSetup();
+    CMD_REPLY("OK: mqtt set");
+  } else if ( strcmp(key, "BRIGHT") == 0 ) {
+    applyBrightness((uint8_t)constrain(atoi(val), 0, 2));
+    CMD_REPLY("OK: brightness set");
+  } else if ( strcmp(key, "PALETTE") == 0 ) {
+    applyPalette((uint8_t)constrain(atoi(val), 0, 5));
+    CMD_REPLY("OK: palette set");
+  } else if ( strcmp(key, "COLOR") == 0 ) {
+    int r = 0, g = 0, b = 0;
+    sscanf(val, "%d,%d,%d", &r, &g, &b);
+    mqttSolidColor = CRGB(constrain(r,0,255), constrain(g,0,255), constrain(b,0,255));
+    mqttColorActive = true;
+    CMD_REPLY("OK: color set");
+  } else if ( strcmp(key, "SCROLL") == 0 ) {
+    renderStringToScrollBuf(val);
+    dispState = STATE_SCROLL;
+    CMD_REPLY("OK: scrolling");
+  } else if ( strcmp(key, "SPEED") == 0 ) {
+    uint16_t s = (uint16_t)constrain(atoi(val), 20, 500);
+    scrollSpeedMs = s;
+    CMD_REPLY("OK: speed set");
+  } else {
+    char errbuf[64];
+    snprintf(errbuf, sizeof(errbuf), "ERR: unknown key %s", key);
+    CMD_REPLY_S(errbuf);
+  }
+}
+
+void handleSerialInput() {
+  while ( Serial.available() ) {
+    char c = (char)Serial.read();
+    if ( c == '\n' || c == '\r' ) {
+      if ( serialPos > 0 ) {
+        serialBuf[serialPos] = '\0';
+        parseSerialCommand(serialBuf);
+        serialPos = 0;
+      }
+    } else if ( serialPos < 127 ) {
+      serialBuf[serialPos++] = c;
+    }
+  }
+}
+// ===== END UART COMMANDS =====
+
+
+// ===== SECTION: WEB SERVER =====
+
+static const char WEB_PAGE[] PROGMEM = R"rawliteral(
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LazyMiniGrid Controller</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;font-size:14px;background:#1a1a2e;color:#e0e0e0;max-width:420px;margin:auto;padding:12px}
+h1{font-size:16px;color:#a8d8ea;margin-bottom:12px;letter-spacing:.5px}
+.tabs{display:flex;gap:4px;margin-bottom:10px}
+.tab{flex:1;padding:7px 4px;background:#0f3460;border:1px solid #1a4a80;border-radius:4px;color:#90a4ae;cursor:pointer;font-size:13px;text-align:center}
+.tab:hover,.tab.active{color:#a8d8ea;background:#1a4a80}
+.panel{display:none}.panel.active{display:block}
+.row{display:flex;align-items:center;gap:6px;margin-bottom:8px}
+label{width:90px;flex-shrink:0;color:#90a4ae;font-size:13px}
+input[type=text],input[type=number],select{flex:1;background:#0f3460;border:1px solid #1a4a80;border-radius:4px;color:#e0e0e0;padding:5px 8px;font-size:13px;outline:none}
+input:focus,select:focus{border-color:#a8d8ea}
+input[type=color]{width:40px;height:32px;border:1px solid #1a4a80;border-radius:4px;background:none;padding:2px;cursor:pointer}
+.rg{display:flex;gap:10px;flex:1}
+.rg label{width:auto;display:flex;align-items:center;gap:4px;cursor:pointer;color:#e0e0e0}
+button{background:#0f3460;border:1px solid #1a4a80;border-radius:4px;color:#a8d8ea;padding:5px 12px;cursor:pointer;font-size:13px;white-space:nowrap}
+button:hover{background:#1a4a80}button:active{background:#a8d8ea;color:#0f3460}
+.wide{width:100%;margin-top:2px}
+.info{font-size:12px;color:#607d8b;line-height:1.6;margin-top:4px}
+.info code{background:#0f3460;padding:1px 4px;border-radius:3px;color:#a8d8ea}
+#log{background:#0a0a1a;border:1px solid #0f3460;border-radius:4px;padding:8px;font-family:monospace;font-size:12px;color:#4caf50;max-height:100px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;margin-top:10px}
+#ip{font-size:12px;color:#607d8b;margin-bottom:10px}
+</style></head><body>
+<h1>LazyMiniGrid Controller</h1>
+<div id="ip">Loading device info…</div>
+<div class="tabs">
+  <div class="tab active" onclick="tab(this,'settings')">Settings</div>
+  <div class="tab" onclick="tab(this,'display')">Display</div>
+  <div class="tab" onclick="tab(this,'mqtt')">MQTT</div>
+</div>
+
+<div id="settings" class="panel active">
+  <div class="row"><label>City</label><input id="city" type="text" placeholder="e.g. London" maxlength="23"><button onclick="send('CITY='+v('city'))">Apply</button></div>
+  <div class="row"><label>Info Mode</label>
+    <select id="mode">
+      <option value="0">0 – Clock only</option>
+      <option value="1">1 – Weather</option>
+      <option value="2">2 – Bitcoin price</option>
+      <option value="3">3 – Custom text</option>
+      <option value="4">4 – Weather + BTC</option>
+    </select>
+    <button onclick="send('MODE='+v('mode'))">Apply</button>
+  </div>
+  <div class="row"><label>Brightness</label>
+    <div class="rg">
+      <label><input type="radio" name="br" value="0"> Low</label>
+      <label><input type="radio" name="br" value="1" checked> Med</label>
+      <label><input type="radio" name="br" value="2"> High</label>
+    </div>
+    <button onclick="send('BRIGHT='+rv('br'))">Apply</button>
+  </div>
+  <div class="row"><label>Palette</label>
+    <select id="palette">
+      <option value="0">0 – Red/Blue/Purple</option>
+      <option value="1">1 – Orange/Warm</option>
+      <option value="2">2 – Ocean</option>
+      <option value="3">3 – Rainbow</option>
+      <option value="4">4 – Party</option>
+      <option value="5">5 – Green</option>
+    </select>
+    <button onclick="send('PALETTE='+v('palette'))">Apply</button>
+  </div>
+</div>
+
+<div id="display" class="panel">
+  <div class="row"><label>Custom text</label><input id="txt" type="text" placeholder="HELLO WORLD" maxlength="63"><button onclick="send('TEXT='+v('txt'))">Save</button></div>
+  <div class="row"><label></label><button class="wide" onclick="send('SCROLL='+v('txt'))">Send &amp; Scroll now</button></div>
+  <div class="row"><label>Scroll speed</label>
+    <select id="speed">
+      <option value="40">Fast (40 ms)</option>
+      <option value="80" selected>Normal (80 ms)</option>
+      <option value="120">Medium (120 ms)</option>
+      <option value="200">Slow (200 ms)</option>
+      <option value="350">Very slow (350 ms)</option>
+    </select>
+    <button onclick="send('SPEED='+v('speed'))">Apply</button>
+  </div>
+  <div class="row"><label>LED color</label><input id="cp" type="color" value="#ff0000"><button onclick="applyColor()">Apply</button></div>
+  <div class="row"><label></label><button class="wide" onclick="send('PALETTE='+v('palette'))">Reset to palette</button></div>
+</div>
+
+<div id="mqtt" class="panel">
+  <div class="row"><label>Broker host</label><input id="mhost" type="text" placeholder="192.168.1.100" maxlength="23"></div>
+  <div class="row"><label>Port</label><input id="mport" type="number" value="1883" min="1" max="65535"><button onclick="send('MQTT='+v('mhost')+':'+v('mport'))">Save &amp; Reconnect</button></div>
+  <div class="info">Topics: <code>lmg/text</code>, <code>lmg/color</code>, <code>lmg/mode</code>, <code>lmg/brightness</code>, <code>lmg/palette</code></div>
+</div>
+
+<button class="wide" onclick="send('STATUS')" style="margin-top:10px">Get Status</button>
+<div id="log"></div>
+
+<script>
+function tab(el,id){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById(id).classList.add('active');
+}
+function v(id){return document.getElementById(id).value.trim();}
+function rv(name){const r=document.querySelector('input[name="'+name+'"]:checked');return r?r.value:'1';}
+function log(msg){const l=document.getElementById('log');l.textContent=msg+'\n'+l.textContent;const lines=l.textContent.split('\n');if(lines.length>20)l.textContent=lines.slice(0,20).join('\n');}
+async function send(cmd){
+  try{
+    const r=await fetch('/cmd',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'cmd='+encodeURIComponent(cmd)});
+    const t=await r.text();log(t.trim());
+  }catch(e){log('ERR: '+e.message);}
+}
+function applyColor(){
+  const hex=document.getElementById('cp').value;
+  const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);
+  send('COLOR='+r+','+g+','+b);
+}
+async function loadStatus(){
+  try{
+    const r=await fetch('/status');
+    const j=await r.json();
+    document.getElementById('ip').textContent='Device IP: '+location.hostname+' | Mode: '+j.mode+' | City: '+j.city;
+    document.getElementById('city').value=j.city||'';
+    document.getElementById('mode').value=j.mode||0;
+    document.getElementById('palette').value=j.palette||0;
+    document.getElementById('txt').value=j.text||'';
+    if(j.speed){const sp=document.getElementById('speed');const opts=[...sp.options].map(o=>parseInt(o.value));const closest=opts.reduce((a,b)=>Math.abs(b-j.speed)<Math.abs(a-j.speed)?b:a);sp.value=closest;}
+    const br=document.querySelector('input[name="br"][value="'+j.bright+'"]');
+    if(br)br.checked=true;
+    if(j.mqtt){const p=j.mqtt.lastIndexOf(':');if(p>0){document.getElementById('mhost').value=j.mqtt.slice(0,p);document.getElementById('mport').value=j.mqtt.slice(p+1);}}
+  }catch(e){document.getElementById('ip').textContent='Could not load status: '+e.message;}
+}
+loadStatus();
+</script>
+</body></html>
+)rawliteral";
+
+void setupWebServer() {
+  webCmdResponse[0] = '\0';
+
+  webServer.on("/", HTTP_GET, []() {
+    webServer.sendHeader("Cache-Control", "no-cache");
+    webServer.send_P(200, "text/html", WEB_PAGE);
+  });
+
+  webServer.on("/status", HTTP_GET, []() {
+    char json[192];
+    snprintf(json, sizeof(json),
+             "{\"mode\":%d,\"city\":\"%s\",\"text\":\"%s\",\"mqtt\":\"%s:%s\",\"bright\":%d,\"palette\":%d,\"speed\":%d}",
+             infoMode, cityName, customText, mqttBroker, mqttPort, brightnessIndex, paletteIndex, scrollSpeedMs);
+    webServer.sendHeader("Access-Control-Allow-Origin", "*");
+    webServer.send(200, "application/json", json);
+  });
+
+  webServer.on("/cmd", HTTP_POST, []() {
+    String cmdStr = webServer.arg("cmd");
+    if ( cmdStr.length() == 0 ) {
+      webServer.send(400, "text/plain", "ERR: empty cmd");
+      return;
+    }
+    char buf[128];
+    cmdStr.toCharArray(buf, sizeof(buf));
+    webCmdResponse[0] = '\0';
+    parseSerialCommand(buf);
+    webServer.sendHeader("Access-Control-Allow-Origin", "*");
+    webServer.send(200, "text/plain",
+                   webCmdResponse[0] ? webCmdResponse : "OK");
+  });
+
+  webServer.onNotFound([]() {
+    webServer.send(404, "text/plain", "Not found");
+  });
+
+  webServer.begin();
+  Serial.print(F("Web UI: http://"));
+  Serial.println(WiFi.localIP());
+}
+// ===== END WEB SERVER =====
+
+#endif // NODEMCU

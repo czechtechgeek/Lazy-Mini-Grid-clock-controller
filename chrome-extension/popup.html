@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LazyMiniGrid Controller</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <span class="title">LazyMiniGrid Controller</span>
+    <span id="status-dot" class="dot disconnected" title="Disconnected"></span>
+  </header>
+
+  <div id="connect-bar">
+    <button id="btn-connect">Connect USB</button>
+    <button id="btn-disconnect" class="hidden">Disconnect</button>
+    <span id="connect-label">Not connected</span>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="settings">Settings</button>
+    <button class="tab" data-tab="display">Display</button>
+    <button class="tab" data-tab="mqtt">MQTT</button>
+  </div>
+
+  <!-- Settings tab -->
+  <div id="tab-settings" class="tab-content active">
+    <div class="row">
+      <label>City</label>
+      <input id="city" type="text" placeholder="e.g. London" maxlength="23">
+      <button id="btn-city">Apply</button>
+    </div>
+    <div class="row">
+      <label>Info Mode</label>
+      <select id="mode">
+        <option value="0">0 – Clock only</option>
+        <option value="1">1 – Weather</option>
+        <option value="2">2 – Bitcoin price</option>
+        <option value="3">3 – Custom text</option>
+        <option value="4">4 – Weather + BTC</option>
+      </select>
+      <button id="btn-mode">Apply</button>
+    </div>
+    <div class="row">
+      <label>Brightness</label>
+      <div class="radio-group">
+        <label><input type="radio" name="bright" value="0"> Low</label>
+        <label><input type="radio" name="bright" value="1" checked> Med</label>
+        <label><input type="radio" name="bright" value="2"> High</label>
+      </div>
+      <button id="btn-bright">Apply</button>
+    </div>
+    <div class="row">
+      <label>Palette</label>
+      <select id="palette">
+        <option value="0">0 – Red/Blue/Purple</option>
+        <option value="1">1 – Orange/Warm</option>
+        <option value="2">2 – Ocean</option>
+        <option value="3">3 – Rainbow</option>
+        <option value="4">4 – Party</option>
+        <option value="5">5 – Green</option>
+      </select>
+      <button id="btn-palette">Apply</button>
+    </div>
+  </div>
+
+  <!-- Display tab -->
+  <div id="tab-display" class="tab-content hidden">
+    <div class="row">
+      <label>Custom text</label>
+      <input id="custom-text" type="text" placeholder="HELLO WORLD" maxlength="63">
+      <button id="btn-text-save">Save</button>
+    </div>
+    <div class="row">
+      <label>&nbsp;</label>
+      <button id="btn-scroll" class="wide">Send &amp; Scroll now</button>
+    </div>
+    <div class="row">
+      <label>Scroll speed</label>
+      <select id="scroll-speed">
+        <option value="40">Fast (40 ms)</option>
+        <option value="80" selected>Normal (80 ms)</option>
+        <option value="120">Medium (120 ms)</option>
+        <option value="200">Slow (200 ms)</option>
+        <option value="350">Very slow (350 ms)</option>
+      </select>
+      <button id="btn-speed">Apply</button>
+    </div>
+    <div class="row">
+      <label>LED color</label>
+      <input id="color-picker" type="color" value="#ff0000">
+      <button id="btn-color">Apply</button>
+    </div>
+    <div class="row">
+      <label>&nbsp;</label>
+      <button id="btn-color-reset" class="wide">Reset to palette</button>
+    </div>
+  </div>
+
+  <!-- MQTT tab -->
+  <div id="tab-mqtt" class="tab-content hidden">
+    <div class="row">
+      <label>Broker host</label>
+      <input id="mqtt-host" type="text" placeholder="192.168.1.100" maxlength="23">
+    </div>
+    <div class="row">
+      <label>Port</label>
+      <input id="mqtt-port" type="number" value="1883" min="1" max="65535" style="width:70px">
+      <button id="btn-mqtt">Save &amp; Reconnect</button>
+    </div>
+    <div class="info">
+      Topics: <code>lmg/text</code>, <code>lmg/color</code>, <code>lmg/mode</code>,
+      <code>lmg/brightness</code>, <code>lmg/palette</code>, <code>lmg/btc</code>, <code>lmg/weather</code>
+    </div>
+  </div>
+
+  <!-- Footer: status command + log -->
+  <div id="footer">
+    <button id="btn-status">Get Status</button>
+    <div id="log"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
