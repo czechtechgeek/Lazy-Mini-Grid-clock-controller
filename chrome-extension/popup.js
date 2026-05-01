@@ -137,6 +137,10 @@ document.getElementById('btn-color').addEventListener('click', () => {
   send('COLOR=' + r + ',' + g + ',' + b);
 });
 
+document.getElementById('btn-speed').addEventListener('click', () => {
+  send('SPEED=' + document.getElementById('scroll-speed').value);
+});
+
 document.getElementById('btn-color-reset').addEventListener('click', () => {
   send('PALETTE=' + document.getElementById('palette').value);
 });

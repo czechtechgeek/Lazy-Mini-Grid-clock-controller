@@ -381,8 +381,8 @@ char mqttPort[6]     = "1883";
 char infoMessage[96];
 
 #define SCROLL_BUF_COLS  128
-#define SCROLL_SPEED_MS  80
 #define CLOCK_SHOW_MS    15000UL
+uint16_t scrollSpeedMs = 80;       // ms per column; configurable via SPEED= command
 uint8_t  scrollBuf[SCROLL_BUF_COLS][RES_Y];
 uint16_t scrollOffset  = 0;
 uint16_t scrollLen     = 0;
@@ -844,7 +844,7 @@ void loop() {
   // Scroll tick
   if ( dispState == STATE_SCROLL ) {
     static unsigned long lastScrollTick = 0;
-    if ( millis() - lastScrollTick >= SCROLL_SPEED_MS ) {
+    if ( millis() - lastScrollTick >= scrollSpeedMs ) {
       FastLED.clear();
       drawScrollFrame();
       colorizeOutput(colorMode);
@@ -1276,16 +1276,18 @@ void colorizeOutput(uint8_t mode) {
 
 #ifdef NODEMCU
   // During scroll the text spans arbitrary x positions, not just the digit columns.
-  // Colorize every lit pixel across the full display width so the text is visible.
+  // Use dedicated statics so clock and scroll color cycles don't interfere.
   if ( dispState == STATE_SCROLL ) {
-    if ( millis() - lastColorChange > colorSpeed ) {
-      if ( reverseColorCycling ) startColor--; else startColor++;
-      lastColorChange = millis();
+    static uint8_t scrollHue = 0;
+    static unsigned long scrollHueTime = 0;
+    if ( millis() - scrollHueTime > 40 ) {   // full palette cycle ~10 s, smooth and flicker-free
+      scrollHue++;
+      scrollHueTime = millis();
     }
     for ( uint8_t x = 0; x < RES_X; x++ ) {
       for ( uint8_t y = 0; y < RES_Y; y++ ) {
         uint16_t px = calcPixel(x, y);
-        if ( leds[px] ) leds[px] = ColorFromPalette(currentPalette, startColor + x * 12, brightness, LINEARBLEND);
+        if ( leds[px] ) leds[px] = ColorFromPalette(currentPalette, scrollHue + x * 10, brightness, LINEARBLEND);
       }
     }
     if ( mqttColorActive ) {
@@ -2185,36 +2187,37 @@ void connectWPS() {                                                             
 
 /* A-Z (indices 0-25), '-' (26), '.' (27), '$' (28), ' ' (29)
    Each glyph is 3x5, stored BOTTOM-ROW FIRST to match showChar() convention */
+// Row 0 = top of character (matches digit font: y-flip sends row 0 to physical top)
 const uint8_t extChars[30][CHAR_X * CHAR_Y] PROGMEM = {
-  { 1,0,1, 1,0,1, 1,1,1, 1,0,1, 0,1,0 },   // A
-  { 1,1,0, 1,0,1, 1,1,0, 1,0,1, 1,1,0 },   // B
-  { 0,1,1, 1,0,0, 1,0,0, 1,0,0, 0,1,1 },   // C
-  { 1,1,0, 1,0,1, 1,0,1, 1,0,1, 1,1,0 },   // D
-  { 1,1,1, 1,0,0, 1,1,0, 1,0,0, 1,1,1 },   // E
-  { 1,0,0, 1,0,0, 1,1,0, 1,0,0, 1,1,1 },   // F
-  { 0,1,1, 1,0,1, 1,0,1, 1,0,0, 0,1,1 },   // G
-  { 1,0,1, 1,0,1, 1,1,1, 1,0,1, 1,0,1 },   // H
-  { 1,1,1, 0,1,0, 0,1,0, 0,1,0, 1,1,1 },   // I
-  { 0,1,0, 1,0,1, 0,0,1, 0,0,1, 0,1,1 },   // J
-  { 1,0,1, 1,1,0, 1,0,0, 1,1,0, 1,0,1 },   // K
-  { 1,1,1, 1,0,0, 1,0,0, 1,0,0, 1,0,0 },   // L
-  { 1,0,1, 1,0,1, 1,1,1, 1,1,1, 1,0,1 },   // M
-  { 1,0,1, 1,0,1, 1,0,1, 1,1,0, 1,0,1 },   // N
-  { 1,1,1, 1,0,1, 1,0,1, 1,0,1, 1,1,1 },   // O
-  { 1,0,0, 1,0,0, 1,1,0, 1,0,1, 1,1,0 },   // P
-  { 0,1,1, 1,1,1, 1,0,1, 1,0,1, 0,1,0 },   // Q
-  { 1,0,1, 1,1,0, 1,0,1, 1,1,0, 1,1,0 },   // R
-  { 1,1,0, 0,0,1, 0,1,0, 1,0,0, 0,1,1 },   // S
-  { 0,1,0, 0,1,0, 0,1,0, 0,1,0, 1,1,1 },   // T
-  { 0,1,0, 1,0,1, 1,0,1, 1,0,1, 1,0,1 },   // U
-  { 0,1,0, 0,1,0, 1,0,1, 1,0,1, 1,0,1 },   // V
-  { 1,0,1, 1,1,1, 1,0,1, 1,0,1, 1,0,1 },   // W
-  { 1,0,1, 0,1,0, 1,0,1, 0,1,0, 1,0,1 },   // X
-  { 0,1,0, 0,1,0, 0,1,0, 1,0,1, 1,0,1 },   // Y
-  { 1,1,1, 1,0,0, 0,1,0, 0,0,1, 1,1,1 },   // Z
-  { 0,0,0, 0,0,0, 1,1,1, 0,0,0, 0,0,0 },   // -  (index 26)
-  { 1,0,0, 0,0,0, 0,0,0, 0,0,0, 0,0,0 },   // .  (index 27)
-  { 0,1,0, 1,1,0, 0,1,0, 0,1,1, 0,1,0 },   // $  (index 28)
+  { 0,1,0, 1,0,1, 1,1,1, 1,0,1, 1,0,1 },   // A
+  { 1,1,0, 1,0,1, 1,1,0, 1,0,1, 1,1,0 },   // B  (symmetric)
+  { 0,1,1, 1,0,0, 1,0,0, 1,0,0, 0,1,1 },   // C  (symmetric)
+  { 1,1,0, 1,0,1, 1,0,1, 1,0,1, 1,1,0 },   // D  (symmetric)
+  { 1,1,1, 1,0,0, 1,1,0, 1,0,0, 1,1,1 },   // E  (symmetric)
+  { 1,1,1, 1,0,0, 1,1,0, 1,0,0, 1,0,0 },   // F
+  { 0,1,1, 1,0,0, 1,0,1, 1,0,1, 0,1,1 },   // G
+  { 1,0,1, 1,0,1, 1,1,1, 1,0,1, 1,0,1 },   // H  (symmetric)
+  { 1,1,1, 0,1,0, 0,1,0, 0,1,0, 1,1,1 },   // I  (symmetric)
+  { 0,1,1, 0,0,1, 0,0,1, 0,0,1, 1,1,0 },   // J
+  { 1,0,1, 1,1,0, 1,0,0, 1,1,0, 1,0,1 },   // K  (symmetric)
+  { 1,0,0, 1,0,0, 1,0,0, 1,0,0, 1,1,1 },   // L
+  { 1,0,1, 1,1,1, 1,0,1, 1,0,1, 1,0,1 },   // M
+  { 1,0,1, 1,1,0, 1,0,1, 1,0,1, 1,0,1 },   // N
+  { 1,1,1, 1,0,1, 1,0,1, 1,0,1, 1,1,1 },   // O  (symmetric)
+  { 1,1,0, 1,0,1, 1,1,0, 1,0,0, 1,0,0 },   // P
+  { 0,1,0, 1,0,1, 1,0,1, 1,1,1, 0,1,1 },   // Q
+  { 1,1,0, 1,0,1, 1,1,0, 1,1,0, 1,0,1 },   // R
+  { 0,1,1, 1,0,0, 0,1,0, 0,0,1, 1,1,0 },   // S
+  { 1,1,1, 0,1,0, 0,1,0, 0,1,0, 0,1,0 },   // T
+  { 1,0,1, 1,0,1, 1,0,1, 1,0,1, 1,1,1 },   // U
+  { 1,0,1, 1,0,1, 1,0,1, 0,1,0, 0,1,0 },   // V
+  { 1,0,1, 1,0,1, 1,1,1, 1,0,1, 1,0,1 },   // W
+  { 1,0,1, 0,1,0, 1,0,1, 0,1,0, 1,0,1 },   // X  (symmetric)
+  { 1,0,1, 1,0,1, 0,1,0, 0,1,0, 0,1,0 },   // Y
+  { 1,1,1, 0,0,1, 0,1,0, 1,0,0, 1,1,1 },   // Z
+  { 0,0,0, 0,0,0, 1,1,1, 0,0,0, 0,0,0 },   // -  (index 26, symmetric)
+  { 0,0,0, 0,0,0, 0,0,0, 0,0,0, 1,0,0 },   // .  (index 27, dot at bottom-left)
+  { 0,1,0, 0,1,1, 0,1,0, 1,1,0, 0,1,0 },   // $  (index 28)
   { 0,0,0, 0,0,0, 0,0,0, 0,0,0, 0,0,0 },   // ' ' (index 29)
 };
 
@@ -2513,8 +2516,8 @@ void parseSerialCommand(char* cmd) {
 
   if ( strcmp(cmd, "STATUS") == 0 ) {
     snprintf(webCmdResponse, sizeof(webCmdResponse),
-             "{\"mode\":%d,\"city\":\"%s\",\"text\":\"%s\",\"mqtt\":\"%s:%s\",\"bright\":%d,\"palette\":%d}",
-             infoMode, cityName, customText, mqttBroker, mqttPort, brightnessIndex, paletteIndex);
+             "{\"mode\":%d,\"city\":\"%s\",\"text\":\"%s\",\"mqtt\":\"%s:%s\",\"bright\":%d,\"palette\":%d,\"speed\":%d}",
+             infoMode, cityName, customText, mqttBroker, mqttPort, brightnessIndex, paletteIndex, scrollSpeedMs);
     Serial.println(webCmdResponse);
     return;
   }
@@ -2573,6 +2576,10 @@ void parseSerialCommand(char* cmd) {
     renderStringToScrollBuf(val);
     dispState = STATE_SCROLL;
     CMD_REPLY("OK: scrolling");
+  } else if ( strcmp(key, "SPEED") == 0 ) {
+    uint16_t s = (uint16_t)constrain(atoi(val), 20, 500);
+    scrollSpeedMs = s;
+    CMD_REPLY("OK: speed set");
   } else {
     char errbuf[64];
     snprintf(errbuf, sizeof(errbuf), "ERR: unknown key %s", key);
@@ -2670,6 +2677,16 @@ button:hover{background:#1a4a80}button:active{background:#a8d8ea;color:#0f3460}
 <div id="display" class="panel">
   <div class="row"><label>Custom text</label><input id="txt" type="text" placeholder="HELLO WORLD" maxlength="63"><button onclick="send('TEXT='+v('txt'))">Save</button></div>
   <div class="row"><label></label><button class="wide" onclick="send('SCROLL='+v('txt'))">Send &amp; Scroll now</button></div>
+  <div class="row"><label>Scroll speed</label>
+    <select id="speed">
+      <option value="40">Fast (40 ms)</option>
+      <option value="80" selected>Normal (80 ms)</option>
+      <option value="120">Medium (120 ms)</option>
+      <option value="200">Slow (200 ms)</option>
+      <option value="350">Very slow (350 ms)</option>
+    </select>
+    <button onclick="send('SPEED='+v('speed'))">Apply</button>
+  </div>
   <div class="row"><label>LED color</label><input id="cp" type="color" value="#ff0000"><button onclick="applyColor()">Apply</button></div>
   <div class="row"><label></label><button class="wide" onclick="send('PALETTE='+v('palette'))">Reset to palette</button></div>
 </div>
@@ -2713,6 +2730,7 @@ async function loadStatus(){
     document.getElementById('mode').value=j.mode||0;
     document.getElementById('palette').value=j.palette||0;
     document.getElementById('txt').value=j.text||'';
+    if(j.speed){const sp=document.getElementById('speed');const opts=[...sp.options].map(o=>parseInt(o.value));const closest=opts.reduce((a,b)=>Math.abs(b-j.speed)<Math.abs(a-j.speed)?b:a);sp.value=closest;}
     const br=document.querySelector('input[name="br"][value="'+j.bright+'"]');
     if(br)br.checked=true;
     if(j.mqtt){const p=j.mqtt.lastIndexOf(':');if(p>0){document.getElementById('mhost').value=j.mqtt.slice(0,p);document.getElementById('mport').value=j.mqtt.slice(p+1);}}
@@ -2734,8 +2752,8 @@ void setupWebServer() {
   webServer.on("/status", HTTP_GET, []() {
     char json[192];
     snprintf(json, sizeof(json),
-             "{\"mode\":%d,\"city\":\"%s\",\"text\":\"%s\",\"mqtt\":\"%s:%s\",\"bright\":%d,\"palette\":%d}",
-             infoMode, cityName, customText, mqttBroker, mqttPort, brightnessIndex, paletteIndex);
+             "{\"mode\":%d,\"city\":\"%s\",\"text\":\"%s\",\"mqtt\":\"%s:%s\",\"bright\":%d,\"palette\":%d,\"speed\":%d}",
+             infoMode, cityName, customText, mqttBroker, mqttPort, brightnessIndex, paletteIndex, scrollSpeedMs);
     webServer.sendHeader("Access-Control-Allow-Origin", "*");
     webServer.send(200, "application/json", json);
   });
