@@ -73,8 +73,12 @@
 #ifdef NODEMCU
 #ifdef ARDUINO_ARCH_ESP8266
 #include <ESP8266HTTPClient.h>
+#include <ESP8266WebServer.h>
+typedef ESP8266WebServer LMGWebServer;
 #else
 #include <HTTPClient.h>
+#include <WebServer.h>
+typedef WebServer LMGWebServer;
 #endif
 #include <WiFiClient.h>
 #include <ArduinoJson.h>
@@ -388,9 +392,12 @@ PubSubClient mqttClient(mqttWifi);
 bool  mqttColorActive = false;
 CRGB  mqttSolidColor  = CRGB::Black;
 
+LMGWebServer webServer(80);
+
 char    serialBuf[128];
 uint8_t serialPos       = 0;
 uint8_t serialButtonSim = 0;
+char    webCmdResponse[192];   // last command response for web API
 
 unsigned long lastWeatherFetch = 0;
 unsigned long lastBtcFetch     = 0;
@@ -643,6 +650,7 @@ void setup() {
 
 #ifdef NODEMCU
   mqttSetup();
+  setupWebServer();
 #endif
 
   clockStatus = 0;       // change from 1 (startup) to 0 (running mode)
@@ -671,6 +679,7 @@ void loop() {
 #ifdef NODEMCU
   mqttReconnect();
   mqttClient.loop();
+  webServer.handleClient();
 #endif
 #ifdef USERTC
   static RtcDateTime rtcTime = Rtc.GetDateTime().Epoch32Time();  // Get time from rtc (epoch)
@@ -2459,20 +2468,26 @@ void parseSerialCommand(char* cmd) {
     if ( cmd[0] == '6' ) { btnRepeatCounter = 10; serialButtonSim = 3; return; }
   }
 
+// Helper: write response to both Serial and webCmdResponse buffer
+#define CMD_REPLY(msg) do { Serial.println(F(msg)); strncpy(webCmdResponse, msg, sizeof(webCmdResponse)-1); } while(0)
+#define CMD_REPLY_S(msg) do { Serial.println(msg); strncpy(webCmdResponse, msg, sizeof(webCmdResponse)-1); } while(0)
+
   if ( strcmp(cmd, "STATUS") == 0 ) {
-    Serial.printf("{\"mode\":%d,\"city\":\"%s\",\"text\":\"%s\",\"mqtt\":\"%s:%s\",\"bright\":%d,\"palette\":%d}\n",
-                  infoMode, cityName, customText, mqttBroker, mqttPort, brightnessIndex, paletteIndex);
+    snprintf(webCmdResponse, sizeof(webCmdResponse),
+             "{\"mode\":%d,\"city\":\"%s\",\"text\":\"%s\",\"mqtt\":\"%s:%s\",\"bright\":%d,\"palette\":%d}",
+             infoMode, cityName, customText, mqttBroker, mqttPort, brightnessIndex, paletteIndex);
+    Serial.println(webCmdResponse);
     return;
   }
 
   if ( strcmp(cmd, "RESET") == 0 ) {
     for ( int i = 0; i < 128; i++ ) EEPROM.write(i, 0xFF);
     EEPROM.commit();
-    Serial.println(F("OK: EEPROM reset, reboot to apply"));
+    CMD_REPLY("OK: EEPROM reset, reboot to apply");
     return;
   }
 
-  if ( !sep ) { Serial.println(F("ERR: expected KEY=VALUE")); return; }
+  if ( !sep ) { CMD_REPLY("ERR: expected KEY=VALUE"); return; }
 
   *sep = '\0';
   char* key = cmd;
@@ -2482,16 +2497,16 @@ void parseSerialCommand(char* cmd) {
     uint8_t m = (uint8_t)constrain(atoi(val), 0, 4);
     infoMode = m; EEPROM.put(4, infoMode); EEPROM.commit();
     clockDisplayUntil = 0;
-    Serial.println(F("OK: mode set"));
+    CMD_REPLY("OK: mode set");
   } else if ( strcmp(key, "CITY") == 0 ) {
     strncpy(cityName, val, 23); cityName[23] = '\0';
     EEPROM.put(5, cityName); EEPROM.commit();
     lastWeatherFetch = 0;
-    Serial.println(F("OK: city set"));
+    CMD_REPLY("OK: city set");
   } else if ( strcmp(key, "TEXT") == 0 ) {
     strncpy(customText, val, 63); customText[63] = '\0';
     EEPROM.put(29, customText); EEPROM.commit();
-    Serial.println(F("OK: text set"));
+    CMD_REPLY("OK: text set");
   } else if ( strcmp(key, "MQTT") == 0 ) {
     char* colon = strrchr(val, ':');
     if ( colon ) {
@@ -2502,25 +2517,27 @@ void parseSerialCommand(char* cmd) {
     EEPROM.put(93, mqttBroker); EEPROM.put(117, mqttPort); EEPROM.commit();
     mqttClient.disconnect();
     mqttSetup();
-    Serial.println(F("OK: mqtt set"));
+    CMD_REPLY("OK: mqtt set");
   } else if ( strcmp(key, "BRIGHT") == 0 ) {
     applyBrightness((uint8_t)constrain(atoi(val), 0, 2));
-    Serial.println(F("OK: brightness set"));
+    CMD_REPLY("OK: brightness set");
   } else if ( strcmp(key, "PALETTE") == 0 ) {
     applyPalette((uint8_t)constrain(atoi(val), 0, 5));
-    Serial.println(F("OK: palette set"));
+    CMD_REPLY("OK: palette set");
   } else if ( strcmp(key, "COLOR") == 0 ) {
     int r = 0, g = 0, b = 0;
     sscanf(val, "%d,%d,%d", &r, &g, &b);
     mqttSolidColor = CRGB(constrain(r,0,255), constrain(g,0,255), constrain(b,0,255));
     mqttColorActive = true;
-    Serial.println(F("OK: color set"));
+    CMD_REPLY("OK: color set");
   } else if ( strcmp(key, "SCROLL") == 0 ) {
     renderStringToScrollBuf(val);
     dispState = STATE_SCROLL;
-    Serial.println(F("OK: scrolling"));
+    CMD_REPLY("OK: scrolling");
   } else {
-    Serial.print(F("ERR: unknown key ")); Serial.println(key);
+    char errbuf[64];
+    snprintf(errbuf, sizeof(errbuf), "ERR: unknown key %s", key);
+    CMD_REPLY_S(errbuf);
   }
 }
 
@@ -2539,5 +2556,174 @@ void handleSerialInput() {
   }
 }
 // ===== END UART COMMANDS =====
+
+
+// ===== SECTION: WEB SERVER =====
+
+static const char WEB_PAGE[] PROGMEM = R"rawliteral(
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LazyMiniGrid Controller</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;font-size:14px;background:#1a1a2e;color:#e0e0e0;max-width:420px;margin:auto;padding:12px}
+h1{font-size:16px;color:#a8d8ea;margin-bottom:12px;letter-spacing:.5px}
+.tabs{display:flex;gap:4px;margin-bottom:10px}
+.tab{flex:1;padding:7px 4px;background:#0f3460;border:1px solid #1a4a80;border-radius:4px;color:#90a4ae;cursor:pointer;font-size:13px;text-align:center}
+.tab:hover,.tab.active{color:#a8d8ea;background:#1a4a80}
+.panel{display:none}.panel.active{display:block}
+.row{display:flex;align-items:center;gap:6px;margin-bottom:8px}
+label{width:90px;flex-shrink:0;color:#90a4ae;font-size:13px}
+input[type=text],input[type=number],select{flex:1;background:#0f3460;border:1px solid #1a4a80;border-radius:4px;color:#e0e0e0;padding:5px 8px;font-size:13px;outline:none}
+input:focus,select:focus{border-color:#a8d8ea}
+input[type=color]{width:40px;height:32px;border:1px solid #1a4a80;border-radius:4px;background:none;padding:2px;cursor:pointer}
+.rg{display:flex;gap:10px;flex:1}
+.rg label{width:auto;display:flex;align-items:center;gap:4px;cursor:pointer;color:#e0e0e0}
+button{background:#0f3460;border:1px solid #1a4a80;border-radius:4px;color:#a8d8ea;padding:5px 12px;cursor:pointer;font-size:13px;white-space:nowrap}
+button:hover{background:#1a4a80}button:active{background:#a8d8ea;color:#0f3460}
+.wide{width:100%;margin-top:2px}
+.info{font-size:12px;color:#607d8b;line-height:1.6;margin-top:4px}
+.info code{background:#0f3460;padding:1px 4px;border-radius:3px;color:#a8d8ea}
+#log{background:#0a0a1a;border:1px solid #0f3460;border-radius:4px;padding:8px;font-family:monospace;font-size:12px;color:#4caf50;max-height:100px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;margin-top:10px}
+#ip{font-size:12px;color:#607d8b;margin-bottom:10px}
+</style></head><body>
+<h1>LazyMiniGrid Controller</h1>
+<div id="ip">Loading device info…</div>
+<div class="tabs">
+  <div class="tab active" onclick="tab(this,'settings')">Settings</div>
+  <div class="tab" onclick="tab(this,'display')">Display</div>
+  <div class="tab" onclick="tab(this,'mqtt')">MQTT</div>
+</div>
+
+<div id="settings" class="panel active">
+  <div class="row"><label>City</label><input id="city" type="text" placeholder="e.g. London" maxlength="23"><button onclick="send('CITY='+v('city'))">Apply</button></div>
+  <div class="row"><label>Info Mode</label>
+    <select id="mode">
+      <option value="0">0 – Clock only</option>
+      <option value="1">1 – Weather</option>
+      <option value="2">2 – Bitcoin price</option>
+      <option value="3">3 – Custom text</option>
+      <option value="4">4 – Weather + BTC</option>
+    </select>
+    <button onclick="send('MODE='+v('mode'))">Apply</button>
+  </div>
+  <div class="row"><label>Brightness</label>
+    <div class="rg">
+      <label><input type="radio" name="br" value="0"> Low</label>
+      <label><input type="radio" name="br" value="1" checked> Med</label>
+      <label><input type="radio" name="br" value="2"> High</label>
+    </div>
+    <button onclick="send('BRIGHT='+rv('br'))">Apply</button>
+  </div>
+  <div class="row"><label>Palette</label>
+    <select id="palette">
+      <option value="0">0 – Red/Blue/Purple</option>
+      <option value="1">1 – Orange/Warm</option>
+      <option value="2">2 – Ocean</option>
+      <option value="3">3 – Rainbow</option>
+      <option value="4">4 – Party</option>
+      <option value="5">5 – Green</option>
+    </select>
+    <button onclick="send('PALETTE='+v('palette'))">Apply</button>
+  </div>
+</div>
+
+<div id="display" class="panel">
+  <div class="row"><label>Custom text</label><input id="txt" type="text" placeholder="HELLO WORLD" maxlength="63"><button onclick="send('TEXT='+v('txt'))">Save</button></div>
+  <div class="row"><label></label><button class="wide" onclick="send('SCROLL='+v('txt'))">Send &amp; Scroll now</button></div>
+  <div class="row"><label>LED color</label><input id="cp" type="color" value="#ff0000"><button onclick="applyColor()">Apply</button></div>
+  <div class="row"><label></label><button class="wide" onclick="send('PALETTE='+v('palette'))">Reset to palette</button></div>
+</div>
+
+<div id="mqtt" class="panel">
+  <div class="row"><label>Broker host</label><input id="mhost" type="text" placeholder="192.168.1.100" maxlength="23"></div>
+  <div class="row"><label>Port</label><input id="mport" type="number" value="1883" min="1" max="65535"><button onclick="send('MQTT='+v('mhost')+':'+v('mport'))">Save &amp; Reconnect</button></div>
+  <div class="info">Topics: <code>lmg/text</code>, <code>lmg/color</code>, <code>lmg/mode</code>, <code>lmg/brightness</code>, <code>lmg/palette</code></div>
+</div>
+
+<button class="wide" onclick="send('STATUS')" style="margin-top:10px">Get Status</button>
+<div id="log"></div>
+
+<script>
+function tab(el,id){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById(id).classList.add('active');
+}
+function v(id){return document.getElementById(id).value.trim();}
+function rv(name){const r=document.querySelector('input[name="'+name+'"]:checked');return r?r.value:'1';}
+function log(msg){const l=document.getElementById('log');l.textContent=msg+'\n'+l.textContent;const lines=l.textContent.split('\n');if(lines.length>20)l.textContent=lines.slice(0,20).join('\n');}
+async function send(cmd){
+  try{
+    const r=await fetch('/cmd',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'cmd='+encodeURIComponent(cmd)});
+    const t=await r.text();log(t.trim());
+  }catch(e){log('ERR: '+e.message);}
+}
+function applyColor(){
+  const hex=document.getElementById('cp').value;
+  const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);
+  send('COLOR='+r+','+g+','+b);
+}
+async function loadStatus(){
+  try{
+    const r=await fetch('/status');
+    const j=await r.json();
+    document.getElementById('ip').textContent='Device IP: '+location.hostname+' | Mode: '+j.mode+' | City: '+j.city;
+    document.getElementById('city').value=j.city||'';
+    document.getElementById('mode').value=j.mode||0;
+    document.getElementById('palette').value=j.palette||0;
+    document.getElementById('txt').value=j.text||'';
+    const br=document.querySelector('input[name="br"][value="'+j.bright+'"]');
+    if(br)br.checked=true;
+    if(j.mqtt){const p=j.mqtt.lastIndexOf(':');if(p>0){document.getElementById('mhost').value=j.mqtt.slice(0,p);document.getElementById('mport').value=j.mqtt.slice(p+1);}}
+  }catch(e){document.getElementById('ip').textContent='Could not load status: '+e.message;}
+}
+loadStatus();
+</script>
+</body></html>
+)rawliteral";
+
+void setupWebServer() {
+  webCmdResponse[0] = '\0';
+
+  webServer.on("/", HTTP_GET, []() {
+    webServer.sendHeader("Cache-Control", "no-cache");
+    webServer.send_P(200, "text/html", WEB_PAGE);
+  });
+
+  webServer.on("/status", HTTP_GET, []() {
+    char json[192];
+    snprintf(json, sizeof(json),
+             "{\"mode\":%d,\"city\":\"%s\",\"text\":\"%s\",\"mqtt\":\"%s:%s\",\"bright\":%d,\"palette\":%d}",
+             infoMode, cityName, customText, mqttBroker, mqttPort, brightnessIndex, paletteIndex);
+    webServer.sendHeader("Access-Control-Allow-Origin", "*");
+    webServer.send(200, "application/json", json);
+  });
+
+  webServer.on("/cmd", HTTP_POST, []() {
+    String cmdStr = webServer.arg("cmd");
+    if ( cmdStr.length() == 0 ) {
+      webServer.send(400, "text/plain", "ERR: empty cmd");
+      return;
+    }
+    char buf[128];
+    cmdStr.toCharArray(buf, sizeof(buf));
+    webCmdResponse[0] = '\0';
+    parseSerialCommand(buf);
+    webServer.sendHeader("Access-Control-Allow-Origin", "*");
+    webServer.send(200, "text/plain",
+                   webCmdResponse[0] ? webCmdResponse : "OK");
+  });
+
+  webServer.onNotFound([]() {
+    webServer.send(404, "text/plain", "Not found");
+  });
+
+  webServer.begin();
+  Serial.print(F("Web UI: http://"));
+  Serial.println(WiFi.localIP());
+}
+// ===== END WEB SERVER =====
 
 #endif // NODEMCU
